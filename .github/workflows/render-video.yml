@@ -36,7 +36,7 @@ jobs:
 
       - name: Check required inputs
         run: |
-          test -f source/photos.zip || (echo "Missing source/photos.zip. Upload the original three-part photo ZIP to this path, commit it, and rerun the workflow."; exit 1)
+          if [ ! -f source/photos.zip ] && ! find source -maxdepth 1 -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.webp" \) | grep -q .; then echo "Missing photos: upload source/photos.zip or the extracted images directly into source/."; exit 1; fi
           find music -maxdepth 1 -type f -iname '*.mp3' -print
           test "$(find music -maxdepth 1 -type f -iname '*.mp3' | wc -l)" -ge 3 || (echo "Expected all three MP3 files in music/."; exit 1)
 
