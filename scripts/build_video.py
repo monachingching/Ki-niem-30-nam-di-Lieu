@@ -60,6 +60,9 @@ def extract_photos():
             return candidate
     raise FileNotFoundError("No photo ZIP or image files found in source/.")
 
+def natural(p):
+    return [int(x) if x.isdigit() else x.casefold() for x in re.split(r"(\d+)", p.name)]
+
 def part_photos(root, part):
     keys = [f"phần {part}", f"phan {part}", f"part {part}"]
     files = [p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in {".jpg",".jpeg",".png",".webp"}]
@@ -76,9 +79,6 @@ def part_photos(root, part):
             if p.is_dir() and p.name.casefold().replace("_"," ").startswith(("phần "+part, "phan "+part)):
                 result.extend(x for x in p.iterdir() if x.suffix.lower() in {".jpg",".jpeg",".png",".webp"})
     # Keep stable human-friendly order, including names such as 1.5.7.jpg.
-    def natural(p):
-        return [int(x) if x.isdigit() else x.casefold() for x in re.split(r"(\d+)", p.name)]
-    return sorted(set(result), key=natural)
 
 def font(size):
     candidates = [
@@ -184,7 +184,7 @@ def main():
     ], "Part II")
     end_images = [p for p in p3 if p.stem.casefold() == "end"]
     # In a flat upload, named portrait files belong to Part III; numbered files belong to Parts I/II.
-    portraits = [p for p in p3 if p.stem.casefold() != "end" and not re.match(r"^\\d+(?:\\.\\d+)*$", p.stem)]
+    portraits = [p for p in p3 if p.stem.casefold() != "end" and not re.match(r"^\d+(?:\.\d+)*$", p.stem)]
     song1 = find_music(["mong ước", "mong uoc", "mong-ước", "mong-uoc", "mong"])
     song2 = find_music(["như ngày hôm qua", "nhu ngay hom qua", "như-ngày", "nhu-ngay"])
     song3 = find_music(["phép màu", "phep mau"])
