@@ -365,7 +365,7 @@ def main():
         # Crossfade adjacent songs over 3 seconds: the next track begins 3 seconds
         # before the section boundary, while the outgoing track fades down to it.
         overlap = 3.0 if part_index > 0 else 0.0
-        extended_end = min(audio_end + (3.0 if part_index < 2 else 0.0), source_audio.duration)
+        extended_end = min(audio_end + (3.0 if part_index > 0 else 0.0), source_audio.duration)
         segment = source_audio.subclipped(audio_start, extended_end)
         segment = segment.with_effects([
             afx.AudioFadeIn(3.0 if part_index > 0 else 2.0),
