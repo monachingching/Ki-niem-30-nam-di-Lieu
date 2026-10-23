@@ -51,10 +51,14 @@ def extract_photos():
         with zipfile.ZipFile(archive) as z:
             z.extractall(target)
         return target
+    # GitHub upload may contain the extracted images directly in source/ rather than a ZIP.
+    image_files = [p for p in SOURCE.iterdir() if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}]
+    if image_files:
+        return SOURCE
     for candidate in (ROOT / "photos", SOURCE / "photos", ROOT / "Ảnh"):
         if candidate.exists():
             return candidate
-    raise FileNotFoundError("Upload the original photo ZIP to source/photos.zip first.")
+    raise FileNotFoundError("No photo ZIP or image files found in source/.")
 
 def part_photos(root, part):
     keys = [f"phần {part}", f"phan {part}", f"part {part}"]
@@ -63,6 +67,9 @@ def part_photos(root, part):
         s = str(p).casefold().replace("_"," ").replace("-"," ")
         return any(k in s for k in keys)
     result = [p for p in files if score(p)]
+    # Support the common GitHub upload pattern where all images are placed flat in source/.
+    if not result and root.resolve() == SOURCE.resolve():
+        return sorted(files, key=natural)
     if not result:
         # Common zip folder names may be nested under a wrapper directory.
         for p in root.rglob("*"):
@@ -176,7 +183,8 @@ def main():
         "2.46.jpg", "2.6.jpg", "2.5.jpg",
     ], "Part II")
     end_images = [p for p in p3 if p.stem.casefold() == "end"]
-    portraits = [p for p in p3 if p.stem.casefold() != "end"]
+    # In a flat upload, named portrait files belong to Part III; numbered files belong to Parts I/II.
+    portraits = [p for p in p3 if p.stem.casefold() != "end" and not re.match(r"^\\d+(?:\\.\\d+)*$", p.stem)]
     song1 = find_music(["mong ước", "mong uoc", "mong-ước", "mong-uoc", "mong"])
     song2 = find_music(["như ngày hôm qua", "nhu ngay hom qua", "như-ngày", "nhu-ngay"])
     song3 = find_music(["phép màu", "phep mau"])
