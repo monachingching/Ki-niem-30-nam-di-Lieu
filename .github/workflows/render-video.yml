@@ -15,15 +15,10 @@ permissions:
 jobs:
   render:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-
-      - name: Install FFmpeg and fonts
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-dejavu-core
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -31,7 +26,17 @@ jobs:
           python-version: "3.11"
 
       - name: Install video dependencies
-        run: python -m pip install --upgrade pip pillow moviepy librosa
+        run: python -m pip install --upgrade pip pillow moviepy librosa imageio-ffmpeg
+
+      - name: Verify bundled FFmpeg
+        run: |
+          python - <<'PY'
+          import imageio_ffmpeg
+          import subprocess
+          executable = imageio_ffmpeg.get_ffmpeg_exe()
+          print("FFmpeg:", executable)
+          subprocess.run([executable, "-version"], check=True, stdout=subprocess.DEVNULL)
+          PY
 
       - name: Check required inputs
         run: |
@@ -47,7 +52,14 @@ jobs:
       - name: Verify rendered file
         run: |
           test -s output/thpt-quang-trung-30-nam.mp4
-          ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 output/thpt-quang-trung-30-nam.mp4
+          python - <<'PY'
+          import os
+          from moviepy import VideoFileClip
+          path = "output/thpt-quang-trung-30-nam.mp4"
+          with VideoFileClip(path) as clip:
+              print(f"Duration: {clip.duration:.2f}s; size: {os.path.getsize(path)} bytes")
+              assert 470 <= clip.duration <= 490, "Unexpected video duration"
+          PY
 
       - name: Upload MP4 artifact
         uses: actions/upload-artifact@v4

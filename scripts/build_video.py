@@ -9,9 +9,10 @@ Output: output/thpt-quang-trung-30-nam.mp4
 from __future__ import annotations
 import os, re, shutil, subprocess, zipfile
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter, ImageEnhance
+import numpy as np
 import librosa
-from moviepy import ImageClip, AudioFileClip, concatenate_videoclips, CompositeAudioClip
+from moviepy import ImageClip, VideoClip, AudioFileClip, concatenate_videoclips, CompositeAudioClip, afx
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "source"
@@ -120,8 +121,16 @@ def rhythm_cut_points(song, audio_start, section_duration, photo_count):
 def make_card(path, out_path, overlay=None, final=False):
     with Image.open(path) as im:
         im = ImageOps.exif_transpose(im).convert("RGB")
-        # Cover canvas without distorting faces; crop only excess edges.
-        im = ImageOps.fit(im, (W,H), method=Image.Resampling.LANCZOS, centering=(0.5,0.5))
+        # Preserve the entire original image, including heads near the top edge.
+        # Fill any 16:9 gaps with a softened, darkened version of the same image.
+        foreground = ImageOps.contain(im, (W, H), method=Image.Resampling.LANCZOS)
+        background = ImageOps.fit(im, (W, H), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+        background = background.filter(ImageFilter.GaussianBlur(radius=34))
+        background = ImageEnhance.Brightness(background).enhance(0.58)
+        x = (W - foreground.width) // 2
+        y = (H - foreground.height) // 2
+        background.paste(foreground, (x, y))
+        im = background
     draw = ImageDraw.Draw(im, "RGBA")
     if overlay:
         f = font(44 if len(overlay) < 65 else 36)
@@ -150,6 +159,103 @@ def make_card(path, out_path, overlay=None, final=False):
         draw.text(((W-(bbox[2]-bbox[0]))//2, 70),label,font=f,fill=(255,250,235,230))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     im.save(out_path, quality=92)
+
+
+def make_mosaic_board(photos, out_path):
+    """Create one high-resolution board containing every individual portrait."""
+    if not photos:
+        raise RuntimeError("No individual portraits found for the Part III mosaic.")
+    board_w, board_h = W * 2, H * 2
+    cols = 8
+    rows = (len(photos) + cols - 1) // cols
+    gap, margin_x, margin_y = 12, 44, 54
+    tile_w = (board_w - 2 * margin_x - (cols - 1) * gap) // cols
+    tile_h = (board_h - 2 * margin_y - (rows - 1) * gap) // rows
+    board = Image.new("RGB", (board_w, board_h), (242, 237, 224))
+    draw = ImageDraw.Draw(board)
+    label_font = font(22)
+    for index, path in enumerate(photos):
+        row, col = divmod(index, cols)
+        x = margin_x + col * (tile_w + gap)
+        y = margin_y + row * (tile_h + gap)
+        draw.rounded_rectangle(
+            (x, y, x + tile_w, y + tile_h), radius=16,
+            fill=(255, 253, 247), outline=(218, 208, 188), width=2
+        )
+        with Image.open(path) as original:
+            portrait = ImageOps.exif_transpose(original).convert("RGB")
+            # Contain preserves the whole original portrait and avoids face cropping.
+            portrait.thumbnail((tile_w - 28, tile_h - 78), Image.Resampling.LANCZOS)
+            px = x + (tile_w - portrait.width) // 2
+            py = y + 8 + (tile_h - 70 - portrait.height) // 2
+            board.paste(portrait, (px, py))
+        label = path.stem
+        bounds = draw.textbbox((0, 0), label, font=label_font)
+        max_width = tile_w - 20
+        if bounds[2] - bounds[0] > max_width:
+            while label and draw.textbbox((0, 0), label + "…", font=label_font)[2] > max_width:
+                label = label[:-1]
+            label = label + "…"
+        bounds = draw.textbbox((0, 0), label, font=label_font)
+        label_w = bounds[2] - bounds[0]
+        draw.text((x + (tile_w - label_w) // 2, y + tile_h - 56),
+                  label, font=label_font, fill=(54, 67, 61))
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    board.save(out_path, quality=94)
+    return out_path
+
+
+def mosaic_frame_function(board_path, duration):
+    """Return a MoviePy frame callback that gently explores, then reveals the full board."""
+    board = Image.open(board_path).convert("RGB")
+    board_w, board_h = board.size
+    # Begin wide, explore several areas with a restrained zoom, then pull back and hold.
+    keyframes = [
+        (0.0, 1.0, 0.50, 0.50),
+        (12.0, 1.48, 0.36, 0.34),
+        (40.0, 1.48, 0.64, 0.36),
+        (68.0, 1.48, 0.64, 0.64),
+        (94.0, 1.48, 0.36, 0.64),
+        (112.0, 1.0, 0.50, 0.50),
+        (duration, 1.0, 0.50, 0.50),
+    ]
+
+    def frame(t):
+        t = max(0.0, min(float(t), duration))
+        for idx in range(len(keyframes) - 1):
+            a, b = keyframes[idx], keyframes[idx + 1]
+            if a[0] <= t <= b[0]:
+                progress = (t - a[0]) / max(b[0] - a[0], 1e-6)
+                progress = progress * progress * (3 - 2 * progress)
+                scale = a[1] + (b[1] - a[1]) * progress
+                cx = a[2] + (b[2] - a[2]) * progress
+                cy = a[3] + (b[3] - a[3]) * progress
+                break
+        else:
+            _, scale, cx, cy = keyframes[-1]
+        view_w = max(1, int(board_w / scale))
+        view_h = max(1, int(board_h / scale))
+        center_x = min(max(cx * board_w, view_w / 2), board_w - view_w / 2)
+        center_y = min(max(cy * board_h, view_h / 2), board_h - view_h / 2)
+        left = int(center_x - view_w / 2)
+        top = int(center_y - view_h / 2)
+        shot = board.crop((left, top, left + view_w, top + view_h))
+        shot = shot.resize((W, H), Image.Resampling.LANCZOS)
+        absolute_t = 330 + t
+        caption = next((txt for start, end, txt in TEXTS if start <= absolute_t < end), None)
+        if caption:
+            draw = ImageDraw.Draw(shot, "RGBA")
+            f = font(44 if len(caption) < 65 else 36)
+            box = draw.textbbox((0, 0), caption, font=f)
+            text_w = box[2] - box[0]
+            x = (W - text_w) // 2
+            y = H - 150
+            draw.rounded_rectangle((x - 32, y - 18, x + text_w + 32, y + 62),
+                                   radius=18, fill=(10, 18, 20, 165))
+            draw.text((x, y), caption, font=f, fill=(255, 250, 235, 255))
+        return np.asarray(shot)
+
+    return frame
 
 def main():
     WORK.mkdir(parents=True, exist_ok=True)
@@ -183,6 +289,30 @@ def main():
         "2.28.jpg", "2.45.jpg", "2.21.jpg", "2.20.jpg",
         "2.46.jpg", "2.6.jpg", "2.5.jpg",
     ], "Part II")
+
+    # Use the curated sequence first, then the remaining archive photos to avoid
+    # long holds. In flat GitHub uploads, infer the original folders from filenames.
+    image_exts = {".jpg", ".jpeg", ".png", ".webp"}
+    if photo_root.resolve() == SOURCE.resolve():
+        part1_extra = [
+            p for p in p1
+            if p.suffix.lower() in image_exts
+            and re.match(r"^(?:\d+|1(?:\.\d+)+)$", p.stem)
+            and not p.stem.startswith("2.")
+            and p not in selected_p1
+        ]
+        part2_extra = [
+            p for p in p2
+            if p.suffix.lower() in image_exts
+            and re.match(r"^2\.\d+(?:\.\d+)*$", p.stem)
+            and p not in selected_p2
+        ]
+    else:
+        part1_extra = [p for p in p1 if p not in selected_p1]
+        part2_extra = [p for p in p2 if p not in selected_p2]
+    selected_p1 = selected_p1 + sorted(part1_extra, key=natural)
+    selected_p2 = selected_p2 + sorted(part2_extra, key=natural)
+
     end_images = [p for p in p3 if p.stem.casefold() == "end"]
     # In a flat upload, named portrait files belong to Part III; numbered files belong to Parts I/II.
     portraits = [p for p in p3 if p.stem.casefold() != "end" and not re.match(r"^\d+(?:\.\d+)*$", p.stem)]
@@ -200,20 +330,49 @@ def main():
     for part_index, (start, end, song, photos, audio_start, span) in enumerate(section_specs):
         if not photos:
             raise RuntimeError(f"No photos found for part {part_index+1}")
-        cut_points = rhythm_cut_points(song, audio_start, end-start, len(photos))
-        for i, photo in enumerate(photos):
-            photo_duration = cut_points[i+1] - cut_points[i]
-            t = start + cut_points[i]
-            overlay = next((txt for a,b,txt in TEXTS if a <= t < b), None)
-            card_path = WORK / "cards" / f"{part_index+1:02d}-{i:03d}.jpg"
-            make_card(photo, card_path, overlay=overlay, final=(part_index==2 and photo in end_images))
-            clip = ImageClip(str(card_path)).with_duration(photo_duration)
-            clips.append(clip)
+        if part_index == 2:
+            # Part III: one simultaneous portrait mosaic, camera exploration, then
+            # a full-board pullback. Keep End.png as the final 22-second closing card.
+            board_path = make_mosaic_board(portraits, WORK / "cards" / "03-portrait-mosaic.jpg")
+            board_duration = (end - start) - 22
+            clips.append(VideoClip(
+                frame_function=mosaic_frame_function(board_path, board_duration),
+                duration=board_duration,
+            ).with_duration(board_duration))
+            if not end_images:
+                raise RuntimeError("Part III requires the original End.png closing image.")
+            closing_start = start + board_duration
+            closing_caption = next((txt for a, b, txt in TEXTS if a <= closing_start < b), None)
+            closing_path = WORK / "cards" / "03-closing-card.jpg"
+            make_card(end_images[0], closing_path, overlay=closing_caption, final=True)
+            clips.append(ImageClip(str(closing_path)).with_duration(22))
+        else:
+            cut_points = rhythm_cut_points(song, audio_start, end-start, len(photos))
+            for i, photo in enumerate(photos):
+                photo_duration = cut_points[i+1] - cut_points[i]
+                t = start + cut_points[i]
+                overlay = next((txt for a,b,txt in TEXTS if a <= t < b), None)
+                card_path = WORK / "cards" / f"{part_index+1:02d}-{i:03d}.jpg"
+                make_card(photo, card_path, overlay=overlay)
+                # Keep the complete framed photo static: zooming a group photo can
+                # cut off people at the top or sides, even when the source was fitted.
+                clip = ImageClip(str(card_path)).with_duration(photo_duration)
+                clips.append(clip)
         source_audio = AudioFileClip(str(song))
         audio_end = min(audio_start + span, source_audio.duration)
         if audio_end <= audio_start:
             raise RuntimeError(f"Audio start {audio_start}s is beyond the end of {song.name}")
-        audio_clips.append(source_audio.subclipped(audio_start, audio_end).with_start(start))
+        # Crossfade adjacent songs over 3 seconds: the next track begins 3 seconds
+        # before the section boundary, while the outgoing track fades down to it.
+        overlap = 3.0 if part_index > 0 else 0.0
+        extended_end = min(audio_end + (3.0 if part_index > 0 else 0.0), source_audio.duration)
+        segment = source_audio.subclipped(audio_start, extended_end)
+        segment = segment.with_effects([
+            afx.AudioFadeIn(3.0 if part_index > 0 else 2.0),
+            afx.AudioFadeOut(3.0),
+        ])
+        segment = segment.with_start(max(0.0, start - overlap))
+        audio_clips.append(segment)
     video = concatenate_videoclips(clips, method="compose")
     # Normalize audio durations to the exact 8-minute timeline; keep the music order.
     audio = CompositeAudioClip(audio_clips).with_duration(DURATION)
