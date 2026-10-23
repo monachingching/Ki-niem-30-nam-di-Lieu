@@ -10,6 +10,7 @@ from __future__ import annotations
 import os, re, shutil, subprocess, zipfile
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+import librosa
 from moviepy import ImageClip, AudioFileClip, concatenate_videoclips, CompositeAudioClip
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -81,6 +82,32 @@ def font(size):
         if Path(p).exists():
             return ImageFont.truetype(p, size)
     return ImageFont.load_default()
+
+def rhythm_cut_points(song, audio_start, section_duration, photo_count):
+    """Choose photo changes near musical beats, with a gentle 4–7s target cadence."""
+    if photo_count <= 1:
+        return [0.0, section_duration]
+    # Estimate beats only within the selected music segment.
+    y, sr = librosa.load(str(song), sr=22050, mono=True, offset=audio_start, duration=section_duration)
+    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, units="frames")
+    beat_times = librosa.frames_to_time(beat_frames, sr=sr)
+    beat_times = [float(t) for t in beat_times if 0.4 <= t < section_duration - 0.4]
+    # Aim for a calm, readable cadence, then snap each ideal cut to the nearest beat.
+    ideal = [i * section_duration / photo_count for i in range(photo_count + 1)]
+    cuts = [0.0]
+    for target in ideal[1:-1]:
+        nearby = [t for t in beat_times if cuts[-1] + 2.6 <= t <= min(section_duration - 2.6, target + 1.5) and abs(t-target) <= 1.8]
+        candidate = min(nearby, key=lambda t: abs(t-target)) if nearby else target
+        # Avoid tiny or excessively long holds if the beat tracker is noisy.
+        candidate = max(cuts[-1] + 2.6, min(candidate, section_duration - 2.6))
+        cuts.append(candidate)
+    cuts.append(float(section_duration))
+    # Ensure strict ordering even if a sparse beat track repeats a nearby point.
+    for i in range(1, len(cuts)-1):
+        cuts[i] = max(cuts[i], cuts[i-1] + 2.6)
+    for i in range(len(cuts)-2, 0, -1):
+        cuts[i] = min(cuts[i], cuts[i+1] - 2.6)
+    return cuts
 
 def make_card(path, out_path, overlay=None, final=False):
     with Image.open(path) as im:
@@ -164,13 +191,14 @@ def main():
     for part_index, (start, end, song, photos, audio_start, span) in enumerate(section_specs):
         if not photos:
             raise RuntimeError(f"No photos found for part {part_index+1}")
-        per_photo = (end-start)/len(photos)
+        cut_points = rhythm_cut_points(song, audio_start, end-start, len(photos))
         for i, photo in enumerate(photos):
-            t = start + i*per_photo
+            photo_duration = cut_points[i+1] - cut_points[i]
+            t = start + cut_points[i]
             overlay = next((txt for a,b,txt in TEXTS if a <= t < b), None)
             card_path = WORK / "cards" / f"{part_index+1:02d}-{i:03d}.jpg"
             make_card(photo, card_path, overlay=overlay, final=(part_index==2 and photo in end_images))
-            clip = ImageClip(str(card_path)).with_duration(per_photo)
+            clip = ImageClip(str(card_path)).with_duration(photo_duration)
             clips.append(clip)
         source_audio = AudioFileClip(str(song))
         audio_end = min(audio_start + span, source_audio.duration)
