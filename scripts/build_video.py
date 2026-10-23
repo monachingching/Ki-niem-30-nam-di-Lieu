@@ -122,14 +122,38 @@ def main():
     p1, p2, p3 = (part_photos(photo_root, p) for p in ("I","II","III"))
     if not p1 or not p2 or not p3:
         raise RuntimeError(f"Could not identify all three photo folders: I={len(p1)}, II={len(p2)}, III={len(p3)}. Check the ZIP folder names.")
-    # Keep the finale portraits and supplied End image in Part III.
+    # Curated selections: use only chosen school-day and reunion photos.
+    # Part III deliberately keeps the commemorative portrait set and End image.
+    def choose(folder, names, label):
+        by_name = {p.name.casefold(): p for p in folder}
+        selected = []
+        missing = []
+        for name in names:
+            match = by_name.get(name.casefold())
+            if match:
+                selected.append(match)
+            else:
+                missing.append(name)
+        if missing:
+            raise RuntimeError(f"Curated {label} photos not found: {missing}. Check original archive filenames.")
+        return selected
+
+    selected_p1 = choose(p1, [
+        "60.jpg", "61.jpg", "37.jpg", "1.5.7.jpg", "1.5.1.jpg",
+        "1.7.1.jpg", "1.9.jpg", "1.3.jpg", "38.jpg", "22.jpg",
+        "14.jpg", "42.jpg", "47.jpg",
+    ], "Part I")
+    selected_p2 = choose(p2, [
+        "2.50.jpg", "2.47.jpg", "2.49.jpg", "2.48.jpg",
+        "2.28.jpg", "2.45.jpg", "2.21.jpg", "2.20.jpg",
+        "2.46.jpg", "2.6.jpg", "2.5.jpg",
+    ], "Part II")
     end_images = [p for p in p3 if p.stem.casefold() == "end"]
     portraits = [p for p in p3 if p.stem.casefold() != "end"]
     song1 = find_music(["mong ước", "mong uoc", "mong-ước", "mong-uoc", "mong"])
     song2 = find_music(["như ngày hôm qua", "nhu ngay hom qua", "như-ngày", "nhu-ngay"])
     song3 = find_music(["phép màu", "phep mau"])
-    # Select photo pools; ensure the finale has all available portraits then End.png.
-    pools = [p1, p2, portraits + end_images]
+    pools = [selected_p1, selected_p2, portraits + end_images]
     section_specs = [
         (0, 180, song1, pools[0], 0, 180),
         (180, 330, song2, pools[1], 0, 150),
