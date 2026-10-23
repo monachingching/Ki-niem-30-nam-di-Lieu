@@ -9,10 +9,10 @@ Output: output/thpt-quang-trung-30-nam.mp4
 from __future__ import annotations
 import os, re, shutil, subprocess, zipfile
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter, ImageEnhance
 import numpy as np
 import librosa
-from moviepy import ImageClip, VideoClip, AudioFileClip, concatenate_videoclips, CompositeAudioClip
+from moviepy import ImageClip, VideoClip, AudioFileClip, concatenate_videoclips, CompositeAudioClip, afx
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "source"
@@ -121,8 +121,16 @@ def rhythm_cut_points(song, audio_start, section_duration, photo_count):
 def make_card(path, out_path, overlay=None, final=False):
     with Image.open(path) as im:
         im = ImageOps.exif_transpose(im).convert("RGB")
-        # Cover canvas without distorting faces; crop only excess edges.
-        im = ImageOps.fit(im, (W,H), method=Image.Resampling.LANCZOS, centering=(0.5,0.5))
+        # Preserve the entire original image, including heads near the top edge.
+        # Fill any 16:9 gaps with a softened, darkened version of the same image.
+        foreground = ImageOps.contain(im, (W, H), method=Image.Resampling.LANCZOS)
+        background = ImageOps.fit(im, (W, H), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+        background = background.filter(ImageFilter.GaussianBlur(radius=34))
+        background = ImageEnhance.Brightness(background).enhance(0.58)
+        x = (W - foreground.width) // 2
+        y = (H - foreground.height) // 2
+        background.paste(foreground, (x, y))
+        im = background
     draw = ImageDraw.Draw(im, "RGBA")
     if overlay:
         f = font(44 if len(overlay) < 65 else 36)
@@ -346,20 +354,25 @@ def main():
                 overlay = next((txt for a,b,txt in TEXTS if a <= t < b), None)
                 card_path = WORK / "cards" / f"{part_index+1:02d}-{i:03d}.jpg"
                 make_card(photo, card_path, overlay=overlay)
-                clip = ImageClip(str(card_path))
-                # A restrained Ken Burns move on every third photo adds life without
-                # making the whole montage feel restless. Crop back to the 16:9 canvas.
-                if i % 3 == 1:
-                    clip = clip.resized(
-                        lambda t, d=photo_duration: 1.0 + 0.025 * min(t / max(d, 0.1), 1.0)
-                    ).cropped(width=W, height=H)
-                clip = clip.with_duration(photo_duration)
+                # Keep the complete framed photo static: zooming a group photo can
+                # cut off people at the top or sides, even when the source was fitted.
+                clip = ImageClip(str(card_path)).with_duration(photo_duration)
                 clips.append(clip)
         source_audio = AudioFileClip(str(song))
         audio_end = min(audio_start + span, source_audio.duration)
         if audio_end <= audio_start:
             raise RuntimeError(f"Audio start {audio_start}s is beyond the end of {song.name}")
-        audio_clips.append(source_audio.subclipped(audio_start, audio_end).with_start(start))
+        # Crossfade adjacent songs over 3 seconds: the next track begins 3 seconds
+        # before the section boundary, while the outgoing track fades down to it.
+        overlap = 3.0 if part_index > 0 else 0.0
+        extended_end = min(audio_end + (3.0 if part_index < 2 else 0.0), source_audio.duration)
+        segment = source_audio.subclipped(audio_start, extended_end)
+        segment = segment.with_effects([
+            afx.AudioFadeIn(3.0 if part_index > 0 else 2.0),
+            afx.AudioFadeOut(3.0),
+        ])
+        segment = segment.with_start(max(0.0, start - overlap))
+        audio_clips.append(segment)
     video = concatenate_videoclips(clips, method="compose")
     # Normalize audio durations to the exact 8-minute timeline; keep the music order.
     audio = CompositeAudioClip(audio_clips).with_duration(DURATION)
