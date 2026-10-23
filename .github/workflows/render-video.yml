@@ -32,7 +32,7 @@ jobs:
           cache: pip
 
       - name: Install video dependencies
-        run: python -m pip install --upgrade pip pillow moviepy
+        run: python -m pip install --upgrade pip pillow moviepy librosa
 
       - name: Check required inputs
         run: |
