@@ -1,0 +1,59 @@
+name: Render THPT Quang Trung anniversary video
+
+on:
+  workflow_dispatch:
+    inputs:
+      phep_mau_start:
+        description: "Start time in seconds for the Phép Màu chorus segment"
+        required: true
+        default: "100"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg and fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install video dependencies
+        run: python -m pip install --upgrade pip pillow moviepy
+
+      - name: Check required inputs
+        run: |
+          test -f source/photos.zip || (echo "Missing source/photos.zip. Upload the original three-part photo ZIP to this path, commit it, and rerun the workflow."; exit 1)
+          find music -maxdepth 1 -type f -iname '*.mp3' -print
+          test "$(find music -maxdepth 1 -type f -iname '*.mp3' | wc -l)" -ge 3 || (echo "Expected all three MP3 files in music/."; exit 1)
+
+      - name: Render MP4
+        env:
+          PHEP_MAU_START: ${{ inputs.phep_mau_start }}
+        run: python scripts/build_video.py
+
+      - name: Verify rendered file
+        run: |
+          test -s output/thpt-quang-trung-30-nam.mp4
+          ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 output/thpt-quang-trung-30-nam.mp4
+
+      - name: Upload MP4 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: thpt-quang-trung-30-nam-mp4
+          path: output/thpt-quang-trung-30-nam.mp4
+          if-no-files-found: error
+          retention-days: 7
