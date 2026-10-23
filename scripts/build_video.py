@@ -79,6 +79,7 @@ def part_photos(root, part):
             if p.is_dir() and p.name.casefold().replace("_"," ").startswith(("phần "+part, "phan "+part)):
                 result.extend(x for x in p.iterdir() if x.suffix.lower() in {".jpg",".jpeg",".png",".webp"})
     # Keep stable human-friendly order, including names such as 1.5.7.jpg.
+    return sorted(set(result), key=natural)
 
 def font(size):
     candidates = [
