@@ -183,6 +183,30 @@ def main():
         "2.28.jpg", "2.45.jpg", "2.21.jpg", "2.20.jpg",
         "2.46.jpg", "2.6.jpg", "2.5.jpg",
     ], "Part II")
+
+    # Use the curated sequence first, then the remaining archive photos to avoid
+    # long holds. In flat GitHub uploads, infer the original folders from filenames.
+    image_exts = {".jpg", ".jpeg", ".png", ".webp"}
+    if photo_root.resolve() == SOURCE.resolve():
+        part1_extra = [
+            p for p in p1
+            if p.suffix.lower() in image_exts
+            and re.match(r"^(?:\d+|1(?:\.\d+)+)$", p.stem)
+            and not p.stem.startswith("2.")
+            and p not in selected_p1
+        ]
+        part2_extra = [
+            p for p in p2
+            if p.suffix.lower() in image_exts
+            and re.match(r"^2\.\d+(?:\.\d+)*$", p.stem)
+            and p not in selected_p2
+        ]
+    else:
+        part1_extra = [p for p in p1 if p not in selected_p1]
+        part2_extra = [p for p in p2 if p not in selected_p2]
+    selected_p1 = selected_p1 + sorted(part1_extra, key=natural)
+    selected_p2 = selected_p2 + sorted(part2_extra, key=natural)
+
     end_images = [p for p in p3 if p.stem.casefold() == "end"]
     # In a flat upload, named portrait files belong to Part III; numbered files belong to Parts I/II.
     portraits = [p for p in p3 if p.stem.casefold() != "end" and not re.match(r"^\d+(?:\.\d+)*$", p.stem)]
@@ -207,7 +231,14 @@ def main():
             overlay = next((txt for a,b,txt in TEXTS if a <= t < b), None)
             card_path = WORK / "cards" / f"{part_index+1:02d}-{i:03d}.jpg"
             make_card(photo, card_path, overlay=overlay, final=(part_index==2 and photo in end_images))
-            clip = ImageClip(str(card_path)).with_duration(photo_duration)
+            clip = ImageClip(str(card_path))
+            # A restrained Ken Burns move on every third photo adds life without
+            # making the whole montage feel restless. Crop back to the 16:9 canvas.
+            if i % 3 == 1 and not (part_index == 2 and photo in end_images):
+                clip = clip.resized(
+                    lambda t, d=photo_duration: 1.0 + 0.025 * min(t / max(d, 0.1), 1.0)
+                ).cropped(width=W, height=H)
+            clip = clip.with_duration(photo_duration)
             clips.append(clip)
         source_audio = AudioFileClip(str(song))
         audio_end = min(audio_start + span, source_audio.duration)
