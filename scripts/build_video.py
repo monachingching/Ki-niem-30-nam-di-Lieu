@@ -147,13 +147,13 @@ def main():
             card_path = WORK / "cards" / f"{part_index+1:02d}-{i:03d}.jpg"
             make_card(photo, card_path, overlay=overlay, final=(part_index==2 and photo in end_images))
             clip = ImageClip(str(card_path)).with_duration(per_photo)
-            # A restrained cross-dissolve between memories.
-            if clips:
-                from moviepy.video.fx import CrossFadeIn
-                clip = clip.with_effects([CrossFadeIn(0.35)])
             clips.append(clip)
-        audio_clips.append(AudioFileClip(str(song)).subclipped(audio_start, min(audio_start+span, AudioFileClip(str(song)).duration)).with_start(start))
-    video = concatenate_videoclips(clips, method="compose", padding=-0.35)
+        source_audio = AudioFileClip(str(song))
+        audio_end = min(audio_start + span, source_audio.duration)
+        if audio_end <= audio_start:
+            raise RuntimeError(f"Audio start {audio_start}s is beyond the end of {song.name}")
+        audio_clips.append(source_audio.subclipped(audio_start, audio_end).with_start(start))
+    video = concatenate_videoclips(clips, method="compose")
     # Normalize audio durations to the exact 8-minute timeline; keep the music order.
     audio = CompositeAudioClip(audio_clips).with_duration(DURATION)
     video = video.with_duration(DURATION).with_audio(audio)
@@ -161,6 +161,8 @@ def main():
     video.write_videofile(str(OUT), fps=FPS, codec="libx264", audio_codec="aac", bitrate="8000k", preset="medium", threads=4)
     video.close()
     audio.close()
+    for audio_clip in audio_clips:
+        audio_clip.close()
     print(f"Rendered: {OUT} ({DURATION}s, {W}x{H}, {FPS}fps)")
 
 if __name__ == "__main__":
